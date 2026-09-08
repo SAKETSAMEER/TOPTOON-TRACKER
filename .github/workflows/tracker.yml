@@ -1,0 +1,102 @@
+name: Toptoon release tracker
+
+on:
+  schedule:
+    # Every 15 minutes, offset from the top of the hour. Times are UTC.
+    - cron: '7,22,37,52 * * * *'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'check saves baseline/alerts; dry-run changes nothing; test sends one Discord message'
+        type: choice
+        options:
+          - check
+          - dry-run
+          - test
+        default: check
+
+permissions:
+  contents: write
+
+concurrency:
+  group: toptoon-tracker-state
+  cancel-in-progress: false
+
+jobs:
+  track:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Check out default branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Run regression tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Poll or test
+        id: tracker
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          MODE: ${{ inputs.mode || 'check' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$MODE" in
+            check) python tracker.py ;;
+            dry-run) python tracker.py --dry-run ;;
+            test) python tracker.py --test-notification ;;
+            *) echo 'Invalid mode'; exit 1 ;;
+          esac
+
+      - name: Save state even when a series fails
+        id: persist
+        if: ${{ always() && steps.tracker.outcome != 'skipped' && (inputs.mode == 'check' || github.event_name == 'schedule') }}
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f state.json
+          # Preserve the acknowledged state before a possible rebase conflict.
+          mkdir -p "$RUNNER_TEMP/tracker-recovery"
+          cp state.json "$RUNNER_TEMP/tracker-recovery/state.json"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- state.json
+          if git diff --cached --quiet; then
+            echo 'No state changes.'
+            exit 0
+          fi
+          git commit -m 'Update Toptoon tracker state [skip ci]'
+          for attempt in 1 2 3; do
+            if git push origin "HEAD:$DEFAULT_BRANCH"; then
+              exit 0
+            fi
+            sleep "$((attempt * 3))"
+            git fetch origin "$DEFAULT_BRANCH"
+            # Preserve unrelated human commits. State conflicts fail, never force-push.
+            git rebase "origin/$DEFAULT_BRANCH"
+          done
+          echo 'State push failed. Recover state from the uploaded artifact before polling again.'
+          exit 1
+
+      - name: Upload recovery copy of state on failure
+        if: ${{ failure() && steps.persist.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: tracker-state-${{ github.run_id }}
+          path: ${{ runner.temp }}/tracker-recovery/state.json
+          if-no-files-found: warn
+          retention-days: 7
