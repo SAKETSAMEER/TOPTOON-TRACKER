@@ -2,8 +2,8 @@ name: Toptoon release tracker
 
 on:
   schedule:
-    # Every 15 minutes, offset from the top of the hour. Times are UTC.
-    - cron: '7,22,37,44 * * * *'
+    # Fastest native GitHub interval is every 5 minutes. 
+    - cron: '*/5 * * * *'
   workflow_dispatch:
     inputs:
       mode:
@@ -68,7 +68,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -f state.json
+          test -f state.json || echo "{}" > state.json # Added quick fix to prevent first-run crashes
           # Preserve the acknowledged state before a possible rebase conflict.
           mkdir -p "$RUNNER_TEMP/tracker-recovery"
           cp state.json "$RUNNER_TEMP/tracker-recovery/state.json"
