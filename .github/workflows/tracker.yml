@@ -3,7 +3,7 @@ name: Toptoon release tracker
 on:
   schedule:
     # Every 15 minutes, offset from the top of the hour. Times are UTC.
-    - cron: '7,22,37,52 * * * *'
+    - cron: '7,22,37,44 * * * *'
   workflow_dispatch:
     inputs:
       mode:
