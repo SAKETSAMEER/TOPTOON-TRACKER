@@ -1,94 +1,74 @@
-name: Toptoon release tracker
+name: Toptoon Release Tracker
 
 on:
+  schedule:
+    # Runs every 30 minutes at minutes 12 and 42 of every hour
+    - cron: '12,42 * * * *'
   workflow_dispatch:
     inputs:
       mode:
-        description: 'check saves baseline/alerts; dry-run changes nothing; test sends one Discord message'
+        description: 'Run mode'
+        required: true
+        default: 'check'
         type: choice
         options:
           - check
           - dry-run
           - test
-        default: check
-
-permissions:
-  contents: write
 
 concurrency:
-  group: toptoon-tracker-state
+  group: toptoon-tracker
   cancel-in-progress: false
 
 jobs:
   track:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    permissions:
+      contents: write
+
     steps:
-      - name: Check out default branch
+      - name: Check out repository
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.repository.default_branch }}
-          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
-          cache: pip
+          python-version: '3.11'
+          cache: 'pip'
 
       - name: Install dependencies
-        run: python -m pip install -r requirements.txt
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
-      - name: Poll or test
-        id: tracker
+      - name: Run trackers
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          MODE: ${{ inputs.mode || 'check' }}
-        shell: bash
         run: |
-          set -euo pipefail
-          case "$MODE" in
-            check) python tracker.py ;;
-            dry-run) python tracker.py --dry-run ;;
-            test) python tracker.py --test-notification ;;
-            *) echo 'Invalid mode'; exit 1 ;;
-          esac
-
-      - name: Save state even when a series fails
-        id: persist
-        if: ${{ always() && steps.tracker.outcome != 'skipped' && inputs.mode == 'check' }}
-        env:
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -f state.json || echo "{}" > state.json
-          mkdir -p "$RUNNER_TEMP/tracker-recovery"
-          cp state.json "$RUNNER_TEMP/tracker-recovery/state.json"
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -- state.json
-          if git diff --cached --quiet; then
-            echo 'No state changes.'
-            exit 0
+          if [ "${{ github.event.inputs.mode }}" = "test" ]; then
+            python tracker.py --test-notification
+          elif [ "${{ github.event.inputs.mode }}" = "dry-run" ]; then
+            python tracker.py --dry-run
+          else
+            python tracker.py
+            python new_titles.py
           fi
-          git commit -m 'Update Toptoon tracker state [skip ci]'
-          for attempt in 1 2 3; do
-            if git push origin "HEAD:$DEFAULT_BRANCH"; then
-              exit 0
-            fi
-            sleep "$((attempt * 3))"
-            git fetch origin "$DEFAULT_BRANCH"
-            git rebase "origin/$DEFAULT_BRANCH"
-          done
-          echo 'State push failed.'
-          exit 1
 
-      - name: Upload recovery copy of state on failure
-        if: ${{ failure() && steps.persist.outcome != 'skipped' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: tracker-state-${{ github.run_id }}
-          path: ${{ runner.temp }}/tracker-recovery/state.json
-          if-no-files-found: warn
-          retention-days: 7
+      - name: Commit and push state changes
+        if: always()
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Stage both chapter and new title state files
+          git add state.json 2>/dev/null || true
+          git add new_series_state.json 2>/dev/null || true
+          git add seen_series.json 2>/dev/null || true
+
+          # Commit only if files were modified
+          if ! git diff --staged --quiet; then
+            git commit -m "Update tracker state [skip ci]"
+            git push
+          else
+            echo "No state changes to commit."
+          fi
