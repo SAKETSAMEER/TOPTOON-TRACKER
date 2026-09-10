@@ -2,69 +2,47 @@ name: Toptoon release tracker
 
 on:
   schedule:
-    # Runs every 30 minutes
-    - cron: '*/30 * * * *'
-  workflow_dispatch:
-    inputs:
-      mode:
-        description: 'Run mode'
-        required: true
-        default: 'check'
-        type: choice
-        options:
-          - check
-          - dry-run
-          - test
+    # Fastest native GitHub interval is every 5 minutes. 
+    - cron: '*/5 * * * *'
+workflow_dispatch:
+inputs:
+mode:
+@@ -42,9 +39,6 @@ jobs:
+- name: Install dependencies
+run: python -m pip install -r requirements.txt
 
-permissions:
-  contents: write
+      - name: Run regression tests
+        run: python -m unittest discover -s tests -v
 
-jobs:
-  track:
-    runs-on: ubuntu-latest
-    
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+- name: Poll or test
+id: tracker
+env:
+@@ -62,14 +56,13 @@ jobs:
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-          cache: 'pip'
+     - name: Save state even when a series fails
+id: persist
+        if: ${{ always() && steps.tracker.outcome != 'skipped' && (inputs.mode == 'check' || github.event_name == 'schedule') }}
+        if: ${{ always() && steps.tracker.outcome != 'skipped' && inputs.mode == 'check' }}
+env:
+DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+shell: bash
+run: |
+         set -euo pipefail
+          test -f state.json || echo "{}" > state.json # Added quick fix to prevent first-run crashes
+          # Preserve the acknowledged state before a possible rebase conflict.
+          test -f state.json || echo "{}" > state.json
+         mkdir -p "$RUNNER_TEMP/tracker-recovery"
+         cp state.json "$RUNNER_TEMP/tracker-recovery/state.json"
+         git config user.name 'github-actions[bot]'
+@@ -86,10 +79,9 @@ jobs:
+           fi
+           sleep "$((attempt * 3))"
+           git fetch origin "$DEFAULT_BRANCH"
+            # Preserve unrelated human commits. State conflicts fail, never force-push.
+           git rebase "origin/$DEFAULT_BRANCH"
+         done
+          echo 'State push failed. Recover state from the uploaded artifact before polling again.'
+          echo 'State push failed.'
+         exit 1
 
-      - name: Install dependencies
-        run: python -m pip install -r requirements.txt
-
-      - name: Run chapter release tracker
-        env:
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-        run: |
-          if [ "${{ github.event.inputs.mode }}" = "dry-run" ]; then
-            python tracker.py --dry-run
-          elif [ "${{ github.event.inputs.mode }}" = "test" ]; then
-            python tracker.py --test-notification
-          else
-            python tracker.py
-          fi
-
-      - name: Run new series tracker
-        env:
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-        run: |
-          if [ "${{ github.event.inputs.mode }}" = "dry-run" ]; then
-            python new_series_tracker.py --dry-run
-          elif [ "${{ github.event.inputs.mode }}" != "test" ]; then
-            python new_series_tracker.py
-          fi
-
-      - name: Commit and push state changes
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          
-          # Add both state files
-          git add state.json new_series_state.json
-          
-          # Commit and push only if there are changes to avoid job failures
-          git diff --staged --quiet || (git commit -m "chore: update tracking state" && git push)
+     - name: Upload recovery copy of state on failure
