@@ -220,7 +220,7 @@ def parse_series(html: str, slug: str, now: datetime | None = None) -> Series:
         episode_id = row.get("data-episode-id", "")
         if not SLUG.fullmatch(episode_id):
             raise TrackerError("Invalid episode ID in page.")
-        date_tag = row.select_one(".ep_date .date")
+        date_tag = row.select_one(".ep_date")
         if date_tag is None:
             raise TrackerError("Release date selector changed; refusing to advance state.")
         try:
