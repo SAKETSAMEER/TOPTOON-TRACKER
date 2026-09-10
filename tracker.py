@@ -22,7 +22,6 @@ from bs4 import BeautifulSoup
 LOG = logging.getLogger("tracker")
 BASE = "https://toptoon.com"
 KST = timezone(timedelta(hours=9))
-# Compatibility headers, not a way to bypass authentication or access restrictions.
 USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36 "
@@ -69,16 +68,26 @@ class NewSeries:
 
 
 def parse_new_series(html: str) -> tuple[NewSeries, ...]:
-    """Read only the new-series tab, never completed titles or recommendations."""
+    """Read only the new-series tab, strictly requiring the 19+ adult badge."""
     soup = BeautifulSoup(html, "html.parser")
     sections = soup.select('#commonComicList .serial__list[data-name="complete1"]')
+    
     if len(sections) != 1:
         raise TrackerError("New-series tab missing or ambiguous; history remains unchanged.")
+    
     cards = sections[0].select(".serial__item")
     if not cards:
         raise TrackerError("New-series list is empty; refusing to initialize history.")
+    
     found: dict[str, NewSeries] = {}
     for card in cards:
+        # ==========================================
+        # STRICT 19+ FILTER
+        # If the series does not have the adult badge, completely ignore it.
+        # ==========================================
+        if not card.select_one(".ico-adult"):
+            continue
+
         slug = card.get("data-comic-id", "")
         if not SLUG.fullmatch(slug):
             raise TrackerError("New-series card ID missing or invalid.")
@@ -91,6 +100,7 @@ def parse_new_series(html: str) -> tuple[NewSeries, ...]:
             href = BASE + href
         if normalize_slug(href) != slug:
             raise TrackerError("New-series card link does not match its ID.")
+        
         thumbnail = None
         image = card.select_one(".serial__image")
         if image is not None:
@@ -98,10 +108,12 @@ def parse_new_series(html: str) -> tuple[NewSeries, ...]:
                               image.get("style", ""))
             if match:
                 thumbnail = match[1]
+        
         item = NewSeries(slug, title.get_text(" ", strip=True), thumbnail)
         if slug in found and found[slug] != item:
             raise TrackerError("Conflicting new-series cards; history remains unchanged.")
         found[slug] = item
+        
     return tuple(found.values())
 
 
@@ -160,7 +172,6 @@ def load_state(path: Path) -> dict:
 
 
 def save_state(path: Path, state: dict) -> None:
-    """Atomic replacement: an interrupted write cannot truncate existing state."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = None
     try:
@@ -177,7 +188,6 @@ def save_state(path: Path, state: dict) -> None:
 
 
 def release_value(text: str) -> tuple[str, str]:
-    """Keep date-only precision; never pretend midnight is the release time."""
     text = text.strip()
     if re.fullmatch(r"\d{2}\.\d{2}\.\d{2}", text):
         year, month, day = map(int, text.split("."))
@@ -191,7 +201,6 @@ def release_value(text: str) -> tuple[str, str]:
 
 
 def parse_series(html: str, slug: str, now: datetime | None = None) -> Series:
-    """Only inspect the requested series' real episode rows, not recommendations."""
     now = now or datetime.now(KST)
     soup = BeautifulSoup(html, "html.parser")
     title_tag = soup.select_one('meta[property="og:title"]')
@@ -220,7 +229,7 @@ def parse_series(html: str, slug: str, now: datetime | None = None) -> Series:
         episode_id = row.get("data-episode-id", "")
         if not SLUG.fullmatch(episode_id):
             raise TrackerError("Invalid episode ID in page.")
-        date_tag = row.select_one(".ep_date")
+        date_tag = row.select_one(".ep_date .date")
         if date_tag is None:
             raise TrackerError("Release date selector changed; refusing to advance state.")
         try:
@@ -246,11 +255,12 @@ def parse_series(html: str, slug: str, now: datetime | None = None) -> Series:
 class ToptoonClient:
     def __init__(self, interval: float = 5):
         self.session = requests.Session()
-        self.session.headers.update({"User-Agent": USER_AGENT, "Referer": BASE + "/",
-                                     "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
-                                     "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.7"})
-        
-        # Inject the Toptoon 19+ Cookie here
+        self.session.headers.update({
+            "User-Agent": USER_AGENT,
+            "Referer": BASE + "/",
+            "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.7"
+        })
         cookie_string = os.environ.get("TOPTOON_COOKIE", "").strip()
         if cookie_string:
             self.session.headers.update({"Cookie": cookie_string})
@@ -276,7 +286,6 @@ class ToptoonClient:
                     continue
                 raise TrackerError("Toptoon network error after retries.") from None
             if response.status_code in (401, 403, 429):
-                # A rate-limit response ends this run; the next scheduled run is the retry.
                 raise SiteBlocked(f"Toptoon HTTP {response.status_code}; stopping requests, no bypass attempted.")
             if 500 <= response.status_code < 600 and attempt < 2:
                 time.sleep(2 ** (attempt + 1))
@@ -302,7 +311,6 @@ class ToptoonClient:
         return parse_series(self.fetch_page(f"{BASE}/comic/ep_list/{slug}"), slug)
 
     def fetch_new_series(self) -> tuple[NewSeries, ...]:
-        # URL fragments are browser-only; complete1 is selected in the returned HTML.
         return parse_new_series(self.fetch_page(BASE + "/complete"))
 
 
@@ -317,7 +325,6 @@ def webhook_url() -> str:
 
 
 def send_discord(url: str, payload: dict) -> None:
-    """Retry explicit 429 rejection only; ambiguous POST failures may have delivered."""
     for attempt in range(3):
         try:
             response = requests.post(url, params={"wait": "true"}, json=payload,
@@ -358,7 +365,7 @@ def make_payload(series: Series, episode: Episode) -> dict:
 def make_new_series_payload(series: NewSeries) -> dict:
     embed = {"title": series.title[:256], "url": series.url, "color": 0xF45236,
              "description": f"New series spotted on Toptoon!\n[Read series]({series.url})",
-             "footer": {"text": "Toptoon new-series tracker • Detection time"},
+             "footer": {"text": "Toptoon 19+ new-series tracker • Detection time"},
              "timestamp": datetime.now(timezone.utc).isoformat()}
     if series.thumbnail:
         embed["thumbnail"] = {"url": series.thumbnail}
@@ -369,32 +376,35 @@ def make_new_series_payload(series: NewSeries) -> dict:
 def process_new_series(items: tuple[NewSeries, ...], state: dict, path: Path,
                        webhook: str | None, dry_run: bool = False) -> None:
     if not items:
-        raise TrackerError("Empty new-series list; history remains unchanged.")
+        LOG.warning("No 19+ series found on the page. Cookie is likely missing or expired. Skipping new series check to prevent false alarms.")
+        return
+        
     if "new_series" not in state:
         if dry_run:
-            LOG.info("Would baseline %d existing series (no alerts).", len(items))
+            LOG.info("Would baseline %d existing 19+ series (no alerts).", len(items))
             return
         state["new_series"] = sorted({item.slug for item in items})
         save_state(path, state)
-        LOG.info("Baselined %d existing series (no historical alerts).", len(items))
+        LOG.info("Baselined %d existing 19+ series (no historical alerts).", len(items))
         return
+        
     seen = set(state["new_series"])
     pending = [item for item in items if item.slug not in seen]
     LOG.info("New-series tab: listed=%d, unseen=%d", len(items), len(pending))
+    
     for item in pending:
         if item.slug in seen:
             continue
         if dry_run:
-            LOG.info("Would notify new series: %s, link=%s", item.slug, item.url)
+            LOG.info("Would notify new 19+ series: %s, link=%s", item.slug, item.url)
             continue
         if webhook is None:
             raise TrackerError("Webhook is not configured.")
         send_discord(webhook, make_new_series_payload(item))
         seen.add(item.slug)
-        # Keep all seen IDs even after titles leave the rotating new-series tab.
         state["new_series"] = sorted(seen)
         save_state(path, state)
-        LOG.info("Notified new series: %s", item.slug)
+        LOG.info("Notified new 19+ series: %s", item.slug)
         time.sleep(1)
 
 
@@ -423,7 +433,6 @@ def process_series(series: Series, state: dict, path: Path, webhook: str | None,
         if webhook is None:
             raise TrackerError("Webhook is not configured.")
         send_discord(webhook, make_payload(series, episode))
-        # Never advance before Discord acknowledges. Save each delivered chapter individually.
         state["series"][series.slug] = {"last_chapter": str(episode.number), "episode_id": episode.episode_id}
         save_state(path, state)
         LOG.info("%s: notified chapter %s", series.slug, episode.number)
@@ -473,7 +482,6 @@ def main() -> int:
         LOG.error("%s", exc)
         return 1
     except (OSError, ValueError):
-        # Raw exception strings may contain sensitive configuration or response data.
         LOG.error("Configuration/state/IO error. Check JSON schemas and paths; existing history is not reset.")
         return 1
     finally:
