@@ -1,8 +1,6 @@
 name: Toptoon release tracker
 
 on:
-  schedule:
-    - cron: '7,37 * * * *'
   workflow_dispatch:
     inputs:
       mode:
@@ -53,9 +51,9 @@ jobs:
         run: |
           set -euo pipefail
           case "$MODE" in
-            check) python tracker.py ;;
-            dry-run) python tracker.py --dry-run ;;
-            test) python tracker.py --test-notification ;;
+            check) python tracker_2.py ;;
+            dry-run) python tracker_2.py --dry-run ;;
+            test) python tracker_2.py --test-notification ;;
             *) echo 'Invalid mode'; exit 1 ;;
           esac
 
