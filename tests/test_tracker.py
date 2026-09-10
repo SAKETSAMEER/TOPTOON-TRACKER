@@ -56,7 +56,8 @@ class ParserTests(unittest.TestCase):
             parse_series("<html>Login required</html>", "example", NOW)
 
     def test_missing_or_invalid_date_fails_closed(self):
-        for html in [page(row(release="unknown")), page(row().replace('class="date"', 'class="changed"'))]:
+        # Updated to replace the entire ep_date class instead of just the inner date class
+        for html in [page(row(release="unknown")), page(row().replace('class="ep_date"', 'class="changed"'))]:
             with self.subTest(html=html), self.assertRaises(TrackerError):
                 parse_series(html, "example", NOW)
 
