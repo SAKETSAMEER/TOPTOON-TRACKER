@@ -1,54 +1,17 @@
 {
   "new_series": [
-    "Alchemyking",
     "An_NSFW_Guy_Just_Joined_The_Company",
-    "April_comes_again",
-    "Black_Dragon_Forest",
-    "Chaotic_Swordsman",
-    "Cheonjonguirae",
-    "Cohabitation_for_some_reason",
-    "D_fiffrenchi",
-    "Dragonvein",
     "Eat_Segmuwiki",
-    "Eclipse_system_farmer",
-    "Era_of_the_haunted",
     "Erotic_Theater",
     "Excessively_Effective_equipment",
-    "Extra_Protector_missed_right_time",
-    "F_the_beginning",
-    "Gang_ho",
     "I_ate_all_my_classmates_after_graduation",
     "I_love_you_very_much",
-    "Infinite_Loop",
-    "Jeolesgojon",
-    "Juldaetagyung",
     "Leave_the_room",
-    "Level_up_after_10000years",
-    "Level_up_closing_to_Seongju",
-    "Lord_of_fate_when_mutation_strikes",
     "Love_And_Risk",
-    "Marvel_biography",
-    "Modern_Fiction_A",
     "My_Ideal_Type_is_My_Friends_Mom",
-    "Rebirth_God_Husky",
     "SOO_IN",
-    "Sim_ma",
-    "The_Empress_Men",
-    "The_descendants_of_dragon",
-    "The_era_of_the_jobless",
-    "Vill_catalog",
-    "Villain_Students_Book",
-    "a_world_star",
     "capitalist_harem",
-    "chochosulyeoncheonnyeon",
-    "heavenly_decree",
-    "live_with_teacher",
-    "my_exhusband_became_loy",
-    "reincarnation_solver",
-    "samgugji_yeopoui",
-    "sasangchoigangeui_derilsawi",
-    "spiritmaster",
-    "training_for_genius"
+    "live_with_teacher"
   ],
   "series": {
     "Became_an_apartment_manager": {
@@ -60,8 +23,8 @@
       "last_chapter": "13"
     },
     "Excessively_Effective_equipment": {
-      "episode_id": "14",
-      "last_chapter": "14"
+      "episode_id": "13",
+      "last_chapter": "13"
     },
     "I_ate_all_my_classmates_after_graduation": {
       "episode_id": "14",
@@ -76,16 +39,16 @@
       "last_chapter": "10"
     },
     "Love_And_Risk": {
-      "episode_id": "8",
-      "last_chapter": "8"
+      "episode_id": "7",
+      "last_chapter": "7"
     },
     "My_Ideal_Type_is_My_Friends_Mom": {
       "episode_id": "9",
       "last_chapter": "9"
     },
     "capitalist_harem": {
-      "episode_id": "12",
-      "last_chapter": "12"
+      "episode_id": "11",
+      "last_chapter": "11"
     },
     "live_with_teacher": {
       "episode_id": "7",
