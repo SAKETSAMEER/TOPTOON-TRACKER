@@ -1,4 +1,4 @@
-"""Poll public Toptoon episode lists and notify Discord. Python 3.10+."""
+"""Poll public Toptoon new-series and episode lists and notify Discord. Python 3.10+."""
 from __future__ import annotations
 
 import argparse
@@ -57,6 +57,54 @@ class Series:
     episodes: tuple[Episode, ...]
 
 
+@dataclass(frozen=True)
+class NewSeries:
+    slug: str
+    title: str
+    thumbnail: str | None
+
+    @property
+    def url(self) -> str:
+        return f"{BASE}/comic/ep_list/{self.slug}"
+
+
+def parse_new_series(html: str) -> tuple[NewSeries, ...]:
+    """Read only the new-series tab, never completed titles or recommendations."""
+    soup = BeautifulSoup(html, "html.parser")
+    sections = soup.select('#commonComicList .serial__list[data-name="complete1"]')
+    if len(sections) != 1:
+        raise TrackerError("New-series tab missing or ambiguous; history remains unchanged.")
+    cards = sections[0].select(".serial__item")
+    if not cards:
+        raise TrackerError("New-series list is empty; refusing to initialize history.")
+    found: dict[str, NewSeries] = {}
+    for card in cards:
+        slug = card.get("data-comic-id", "")
+        if not SLUG.fullmatch(slug):
+            raise TrackerError("New-series card ID missing or invalid.")
+        link = card.select_one("a.serial__link[href]")
+        title = card.select_one(".serial__title-text")
+        if link is None or title is None or not title.get_text(strip=True):
+            raise TrackerError("New-series card selectors changed; history remains unchanged.")
+        href = link["href"]
+        if href.startswith("/") and not href.startswith("//"):
+            href = BASE + href
+        if normalize_slug(href) != slug:
+            raise TrackerError("New-series card link does not match its ID.")
+        thumbnail = None
+        image = card.select_one(".serial__image")
+        if image is not None:
+            match = re.search(r"url\(\s*['\"]?(https://[^\s'\"()]+)['\"]?\s*\)",
+                              image.get("style", ""))
+            if match:
+                thumbnail = match[1]
+        item = NewSeries(slug, title.get_text(" ", strip=True), thumbnail)
+        if slug in found and found[slug] != item:
+            raise TrackerError("Conflicting new-series cards; history remains unchanged.")
+        found[slug] = item
+    return tuple(found.values())
+
+
 def normalize_slug(value: str) -> str:
     if not isinstance(value, str):
         raise TrackerError("Series entries must be URL or slug strings.")
@@ -102,6 +150,12 @@ def load_state(path: Path) -> dict:
         if not isinstance(entry, dict) or "last_chapter" not in entry:
             raise TrackerError("Invalid state entry; refusing to reset history.")
         number(entry["last_chapter"])
+    if "new_series" in state:
+        seen = state["new_series"]
+        if (not isinstance(seen, list) or not seen
+                or any(not isinstance(slug, str) or not SLUG.fullmatch(slug) for slug in seen)
+                or len(set(seen)) != len(seen)):
+            raise TrackerError("Invalid new-series history; refusing to reset notifications.")
     return state
 
 
@@ -227,17 +281,23 @@ class ToptoonClient:
             return response.text
         raise TrackerError("Toptoon retries exhausted.")
 
-    def fetch(self, slug: str) -> Series:
+    def fetch_page(self, url: str) -> str:
         if self.robots is None:
             self.robots = RobotFileParser()
             self.robots.parse(self.get(BASE + "/robots.txt").splitlines())
             delay = self.robots.crawl_delay(USER_AGENT)
             rate = self.robots.request_rate(USER_AGENT)
             self.interval = max(self.interval, float(delay or 0), rate.seconds / rate.requests if rate else 0)
-        url = f"{BASE}/comic/ep_list/{slug}"
         if not self.robots.can_fetch(USER_AGENT, url):
             raise SiteBlocked("robots.txt disallows polling this path.")
-        return parse_series(self.get(url), slug)
+        return self.get(url)
+
+    def fetch(self, slug: str) -> Series:
+        return parse_series(self.fetch_page(f"{BASE}/comic/ep_list/{slug}"), slug)
+
+    def fetch_new_series(self) -> tuple[NewSeries, ...]:
+        # URL fragments are browser-only; complete1 is selected in the returned HTML.
+        return parse_new_series(self.fetch_page(BASE + "/complete"))
 
 
 def webhook_url() -> str:
@@ -289,6 +349,49 @@ def make_payload(series: Series, episode: Episode) -> dict:
     return {"username": "Toptoon Release Tracker", "allowed_mentions": {"parse": []}, "embeds": [embed]}
 
 
+def make_new_series_payload(series: NewSeries) -> dict:
+    embed = {"title": series.title[:256], "url": series.url, "color": 0xF45236,
+             "description": f"New series spotted on Toptoon!\n[Read series]({series.url})",
+             "footer": {"text": "Toptoon new-series tracker • Detection time"},
+             "timestamp": datetime.now(timezone.utc).isoformat()}
+    if series.thumbnail:
+        embed["thumbnail"] = {"url": series.thumbnail}
+    return {"username": "Toptoon Release Tracker", "allowed_mentions": {"parse": []},
+            "embeds": [embed]}
+
+
+def process_new_series(items: tuple[NewSeries, ...], state: dict, path: Path,
+                       webhook: str | None, dry_run: bool = False) -> None:
+    if not items:
+        raise TrackerError("Empty new-series list; history remains unchanged.")
+    if "new_series" not in state:
+        if dry_run:
+            LOG.info("Would baseline %d existing series (no alerts).", len(items))
+            return
+        state["new_series"] = sorted({item.slug for item in items})
+        save_state(path, state)
+        LOG.info("Baselined %d existing series (no historical alerts).", len(items))
+        return
+    seen = set(state["new_series"])
+    pending = [item for item in items if item.slug not in seen]
+    LOG.info("New-series tab: listed=%d, unseen=%d", len(items), len(pending))
+    for item in pending:
+        if item.slug in seen:
+            continue
+        if dry_run:
+            LOG.info("Would notify new series: %s, link=%s", item.slug, item.url)
+            continue
+        if webhook is None:
+            raise TrackerError("Webhook is not configured.")
+        send_discord(webhook, make_new_series_payload(item))
+        seen.add(item.slug)
+        # Keep all seen IDs even after titles leave the rotating new-series tab.
+        state["new_series"] = sorted(seen)
+        save_state(path, state)
+        LOG.info("Notified new series: %s", item.slug)
+        time.sleep(1)
+
+
 def process_series(series: Series, state: dict, path: Path, webhook: str | None,
                    dry_run: bool = False) -> None:
     entry = state["series"].get(series.slug)
@@ -325,6 +428,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=Path("series.json"))
     parser.add_argument("--state", type=Path, default=Path("state.json"))
+    parser.add_argument("--new-series-only", action="store_true", help="Skip configured chapter checks")
     parser.add_argument("--dry-run", action="store_true", help="Read Toptoon without sending or changing state")
     parser.add_argument("--test-notification", action="store_true", help="Send one test without polling or changing state")
     args = parser.parse_args()
@@ -340,8 +444,15 @@ def main() -> int:
                                    "allowed_mentions": {"parse": []}})
             LOG.info("Test notification sent.")
             return 0
-        slugs = load_config(args.config)
         state = load_state(args.state)
+        try:
+            process_new_series(client.fetch_new_series(), state, args.state, webhook, args.dry_run)
+        except SiteBlocked:
+            raise
+        except TrackerError as exc:
+            LOG.error("New series: %s", exc)
+            failed = True
+        slugs = [] if args.new_series_only else load_config(args.config)
         for slug in slugs:
             try:
                 process_series(client.fetch(slug), state, args.state, webhook, args.dry_run)
