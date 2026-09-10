@@ -1,6 +1,8 @@
 name: Toptoon release tracker
 
 on:
+  schedule:
+    - cron: '7,37 * * * *'
   workflow_dispatch:
     inputs:
       mode:
@@ -39,6 +41,9 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
 
+      - name: Run offline tests
+        run: python -m unittest discover -s tests -v
+
       - name: Poll or test
         id: tracker
         env:
@@ -56,13 +61,16 @@ jobs:
 
       - name: Save state even when a series fails
         id: persist
-        if: ${{ always() && steps.tracker.outcome != 'skipped' && inputs.mode == 'check' }}
+        if: ${{ always() && steps.tracker.outcome != 'skipped' && (github.event_name == 'schedule' || inputs.mode == 'check') }}
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         shell: bash
         run: |
           set -euo pipefail
-          test -f state.json || echo "{}" > state.json
+          if [ ! -f state.json ]; then
+            echo 'No state file to persist.'
+            exit 0
+          fi
           mkdir -p "$RUNNER_TEMP/tracker-recovery"
           cp state.json "$RUNNER_TEMP/tracker-recovery/state.json"
           git config user.name 'github-actions[bot]'
