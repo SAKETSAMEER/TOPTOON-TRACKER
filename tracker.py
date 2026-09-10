@@ -249,6 +249,12 @@ class ToptoonClient:
         self.session.headers.update({"User-Agent": USER_AGENT, "Referer": BASE + "/",
                                      "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
                                      "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.7"})
+        
+        # Inject the Toptoon 19+ Cookie here
+        cookie_string = os.environ.get("TOPTOON_COOKIE", "").strip()
+        if cookie_string:
+            self.session.headers.update({"Cookie": cookie_string})
+            
         self.interval = interval
         self.last_request = 0.0
         self.robots: RobotFileParser | None = None
