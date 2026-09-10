@@ -185,18 +185,30 @@ def save_state(path: Path, state: dict) -> None:
 
 
 def release_value(text: str) -> tuple[str, str]:
-    """Uses re.search instead of fullmatch to bypass logged-in 'Purchased' labels."""
+    text = text.strip()
+    
+    # 1. Try to find a full exact timestamp first
+    match_ts = re.search(r"(\d{4}[.-]\d{2}[.-]\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?)", text)
+    if match_ts:
+        parsed = datetime.fromisoformat(match_ts.group(1).replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=KST)
+        return parsed.isoformat(), "timestamp"
+        
+    # 2. Try YYYY-MM-DD or YYYY.MM.DD
+    match_long = re.search(r"(\d{4}[.-]\d{2}[.-]\d{2})", text)
+    if match_long:
+        return date.fromisoformat(match_long.group(1).replace(".", "-")).isoformat(), "date"
+        
+    # 3. Try YY.MM.DD (Toptoon standard)
     match_short = re.search(r"(\d{2}\.\d{2}\.\d{2})", text)
     if match_short:
         year, month, day = map(int, match_short.group(1).split("."))
         return date(2000 + year, month, day).isoformat(), "date"
-    
-    match_long = re.search(r"(\d{4}[.-]\d{2}[.-]\d{2})", text)
-    if match_long:
-        return date.fromisoformat(match_long.group(1).replace(".", "-")).isoformat(), "date"
-    
+        
+    # Fallback
     try:
-        parsed = datetime.fromisoformat(text.strip().replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
         if parsed.tzinfo is None:
             parsed = parsed.replace(tzinfo=KST)
         return parsed.isoformat(), "timestamp"
@@ -234,7 +246,6 @@ def parse_series(html: str, slug: str, now: datetime | None = None) -> Series:
         if not SLUG.fullmatch(episode_id):
             raise TrackerError("Invalid episode ID in page.")
         
-        # Broadened selector for logged-in users
         date_tag = row.select_one(".ep_date")
         if date_tag is None:
             raise TrackerError("Release date selector changed; refusing to advance state.")
