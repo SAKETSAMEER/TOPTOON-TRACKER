@@ -1,48 +1,94 @@
 name: Toptoon release tracker
 
 on:
-  schedule:
-    # Fastest native GitHub interval is every 5 minutes. 
-    - cron: '*/5 * * * *'
-workflow_dispatch:
-inputs:
-mode:
-@@ -42,9 +39,6 @@ jobs:
-- name: Install dependencies
-run: python -m pip install -r requirements.txt
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'check saves baseline/alerts; dry-run changes nothing; test sends one Discord message'
+        type: choice
+        options:
+          - check
+          - dry-run
+          - test
+        default: check
 
-      - name: Run regression tests
-        run: python -m unittest discover -s tests -v
+permissions:
+  contents: write
 
-- name: Poll or test
-id: tracker
-env:
-@@ -62,14 +56,13 @@ jobs:
+concurrency:
+  group: toptoon-tracker-state
+  cancel-in-progress: false
 
-     - name: Save state even when a series fails
-id: persist
-        if: ${{ always() && steps.tracker.outcome != 'skipped' && (inputs.mode == 'check' || github.event_name == 'schedule') }}
+jobs:
+  track:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Check out default branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Poll or test
+        id: tracker
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          MODE: ${{ inputs.mode || 'check' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$MODE" in
+            check) python tracker.py ;;
+            dry-run) python tracker.py --dry-run ;;
+            test) python tracker.py --test-notification ;;
+            *) echo 'Invalid mode'; exit 1 ;;
+          esac
+
+      - name: Save state even when a series fails
+        id: persist
         if: ${{ always() && steps.tracker.outcome != 'skipped' && inputs.mode == 'check' }}
-env:
-DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-shell: bash
-run: |
-         set -euo pipefail
-          test -f state.json || echo "{}" > state.json # Added quick fix to prevent first-run crashes
-          # Preserve the acknowledged state before a possible rebase conflict.
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        shell: bash
+        run: |
+          set -euo pipefail
           test -f state.json || echo "{}" > state.json
-         mkdir -p "$RUNNER_TEMP/tracker-recovery"
-         cp state.json "$RUNNER_TEMP/tracker-recovery/state.json"
-         git config user.name 'github-actions[bot]'
-@@ -86,10 +79,9 @@ jobs:
-           fi
-           sleep "$((attempt * 3))"
-           git fetch origin "$DEFAULT_BRANCH"
-            # Preserve unrelated human commits. State conflicts fail, never force-push.
-           git rebase "origin/$DEFAULT_BRANCH"
-         done
-          echo 'State push failed. Recover state from the uploaded artifact before polling again.'
+          mkdir -p "$RUNNER_TEMP/tracker-recovery"
+          cp state.json "$RUNNER_TEMP/tracker-recovery/state.json"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- state.json
+          if git diff --cached --quiet; then
+            echo 'No state changes.'
+            exit 0
+          fi
+          git commit -m 'Update Toptoon tracker state [skip ci]'
+          for attempt in 1 2 3; do
+            if git push origin "HEAD:$DEFAULT_BRANCH"; then
+              exit 0
+            fi
+            sleep "$((attempt * 3))"
+            git fetch origin "$DEFAULT_BRANCH"
+            git rebase "origin/$DEFAULT_BRANCH"
+          done
           echo 'State push failed.'
-         exit 1
+          exit 1
 
-     - name: Upload recovery copy of state on failure
+      - name: Upload recovery copy of state on failure
+        if: ${{ failure() && steps.persist.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: tracker-state-${{ github.run_id }}
+          path: ${{ runner.temp }}/tracker-recovery/state.json
+          if-no-files-found: warn
+          retention-days: 7
