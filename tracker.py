@@ -81,10 +81,7 @@ def parse_new_series(html: str) -> tuple[NewSeries, ...]:
     
     found: dict[str, NewSeries] = {}
     for card in cards:
-        # ==========================================
         # STRICT 19+ FILTER
-        # If the series does not have the adult badge, completely ignore it.
-        # ==========================================
         if not card.select_one(".ico-adult"):
             continue
 
@@ -188,16 +185,23 @@ def save_state(path: Path, state: dict) -> None:
 
 
 def release_value(text: str) -> tuple[str, str]:
-    text = text.strip()
-    if re.fullmatch(r"\d{2}\.\d{2}\.\d{2}", text):
-        year, month, day = map(int, text.split("."))
+    """Uses re.search instead of fullmatch to bypass logged-in 'Purchased' labels."""
+    match_short = re.search(r"(\d{2}\.\d{2}\.\d{2})", text)
+    if match_short:
+        year, month, day = map(int, match_short.group(1).split("."))
         return date(2000 + year, month, day).isoformat(), "date"
-    if re.fullmatch(r"\d{4}[.-]\d{2}[.-]\d{2}", text):
-        return date.fromisoformat(text.replace(".", "-")).isoformat(), "date"
-    parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=KST)
-    return parsed.isoformat(), "timestamp"
+    
+    match_long = re.search(r"(\d{4}[.-]\d{2}[.-]\d{2})", text)
+    if match_long:
+        return date.fromisoformat(match_long.group(1).replace(".", "-")).isoformat(), "date"
+    
+    try:
+        parsed = datetime.fromisoformat(text.strip().replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=KST)
+        return parsed.isoformat(), "timestamp"
+    except ValueError as exc:
+        raise ValueError(f"Unrecognized date format: {text}") from exc
 
 
 def parse_series(html: str, slug: str, now: datetime | None = None) -> Series:
@@ -229,13 +233,16 @@ def parse_series(html: str, slug: str, now: datetime | None = None) -> Series:
         episode_id = row.get("data-episode-id", "")
         if not SLUG.fullmatch(episode_id):
             raise TrackerError("Invalid episode ID in page.")
-        date_tag = row.select_one(".ep_date .date")
+        
+        # Broadened selector for logged-in users
+        date_tag = row.select_one(".ep_date")
         if date_tag is None:
             raise TrackerError("Release date selector changed; refusing to advance state.")
         try:
             release, precision = release_value(date_tag.get_text(" ", strip=True))
         except ValueError as exc:
             raise TrackerError("Unrecognized release date; refusing to advance state.") from exc
+        
         if precision == "date":
             if date.fromisoformat(release) > now.astimezone(KST).date():
                 continue
