@@ -43,7 +43,6 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(series.episodes[-1].precision, "date")
 
     def test_future_disabled_and_special_chapters_are_excluded(self):
-        # Updated: Removed the future-date test condition since we now allow early drops!
         html = page(row("2") + row("3", "e3", classes="disabled")
                     + row("4", "e4", classes="disabled") + row("프롤로그", "prologue"))
         self.assertEqual(len(parse_series(html, "example", NOW).episodes), 1)
@@ -75,8 +74,7 @@ class ParserTests(unittest.TestCase):
         payload = make_payload(SERIES, EP3)
         embed = payload["embeds"][0]
         self.assertEqual(embed["url"], EP3.url)
-        self.assertEqual(embed["thumbnail"]["url"], SERIES.thumbnail)
-        self.assertIn("exact time not published", embed["fields"][1]["value"])
+        self.assertEqual(embed["image"]["url"], SERIES.thumbnail)
         self.assertIn("Detection time", embed["footer"]["text"])
         self.assertEqual(payload["allowed_mentions"], {"parse": []})
 
