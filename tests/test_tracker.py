@@ -43,7 +43,8 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(series.episodes[-1].precision, "date")
 
     def test_future_disabled_and_special_chapters_are_excluded(self):
-        html = page(row("2") + row("3", "e3", release="26.09.09")
+        # Updated: Removed the future-date test condition since we now allow early drops!
+        html = page(row("2") + row("3", "e3", classes="disabled")
                     + row("4", "e4", classes="disabled") + row("프롤로그", "prologue"))
         self.assertEqual(len(parse_series(html, "example", NOW).episodes), 1)
 
@@ -56,7 +57,6 @@ class ParserTests(unittest.TestCase):
             parse_series("<html>Login required</html>", "example", NOW)
 
     def test_missing_or_invalid_date_fails_closed(self):
-        # Updated to replace the entire ep_date class instead of just the inner date class
         for html in [page(row(release="unknown")), page(row().replace('class="ep_date"', 'class="changed"'))]:
             with self.subTest(html=html), self.assertRaises(TrackerError):
                 parse_series(html, "example", NOW)
