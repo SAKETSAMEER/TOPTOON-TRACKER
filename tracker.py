@@ -187,26 +187,27 @@ def save_state(path: Path, state: dict) -> None:
 def release_value(text: str) -> tuple[str, str]:
     text = text.strip()
     
-    # 1. Try to find a full exact timestamp first
-    match_ts = re.search(r"(\d{4}[.-]\d{2}[.-]\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?)", text)
-    if match_ts:
-        parsed = datetime.fromisoformat(match_ts.group(1).replace("Z", "+00:00"))
+    # 1. Full timestamp check
+    ts_match = re.search(r"(\d{4}[.-]\d{2}[.-]\d{2}[ T]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)", text)
+    if ts_match:
+        parsed = datetime.fromisoformat(ts_match.group(1).replace("Z", "+00:00"))
         if parsed.tzinfo is None:
             parsed = parsed.replace(tzinfo=KST)
         return parsed.isoformat(), "timestamp"
         
-    # 2. Try YYYY-MM-DD or YYYY.MM.DD
-    match_long = re.search(r"(\d{4}[.-]\d{2}[.-]\d{2})", text)
-    if match_long:
-        return date.fromisoformat(match_long.group(1).replace(".", "-")).isoformat(), "date"
-        
-    # 3. Try YY.MM.DD (Toptoon standard)
-    match_short = re.search(r"(\d{2}\.\d{2}\.\d{2})", text)
-    if match_short:
-        year, month, day = map(int, match_short.group(1).split("."))
+    # 2. YY.MM.DD check
+    date_short = re.search(r"(\d{2})\.(\d{2})\.(\d{2})", text)
+    if date_short:
+        year, month, day = map(int, date_short.groups())
         return date(2000 + year, month, day).isoformat(), "date"
         
-    # Fallback
+    # 3. YYYY-MM-DD or YYYY.MM.DD check
+    date_long = re.search(r"(\d{4})[.-](\d{2})[.-](\d{2})", text)
+    if date_long:
+        year, month, day = map(int, date_long.groups())
+        return date(year, month, day).isoformat(), "date"
+
+    # 4. Fallback ISO parser
     try:
         parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
         if parsed.tzinfo is None:
@@ -254,11 +255,7 @@ def parse_series(html: str, slug: str, now: datetime | None = None) -> Series:
         except ValueError as exc:
             raise TrackerError("Unrecognized release date; refusing to advance state.") from exc
         
-        if precision == "date":
-            if date.fromisoformat(release) > now.astimezone(KST).date():
-                continue
-        elif datetime.fromisoformat(release) > now:
-            continue
+        # Future date filtering is bypassed: Toptoon releases next-day chapters early on the eve of release.
         episode = Episode(chapter, episode_id,
                           f"{BASE}/comic/ep_view/{quote(slug, safe='')}/{quote(episode_id, safe='')}",
                           release, precision)
