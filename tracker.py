@@ -81,7 +81,6 @@ def parse_new_series(html: str) -> tuple[NewSeries, ...]:
     
     found: dict[str, NewSeries] = {}
     for card in cards:
-        # STRICT 19+ FILTER
         if not card.select_one(".ico-adult"):
             continue
 
@@ -187,7 +186,6 @@ def save_state(path: Path, state: dict) -> None:
 def release_value(text: str) -> tuple[str, str]:
     text = text.strip()
     
-    # 1. Full timestamp check
     ts_match = re.search(r"(\d{4}[.-]\d{2}[.-]\d{2}[ T]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)", text)
     if ts_match:
         parsed = datetime.fromisoformat(ts_match.group(1).replace("Z", "+00:00"))
@@ -195,19 +193,16 @@ def release_value(text: str) -> tuple[str, str]:
             parsed = parsed.replace(tzinfo=KST)
         return parsed.isoformat(), "timestamp"
         
-    # 2. YY.MM.DD check
     date_short = re.search(r"(\d{2})\.(\d{2})\.(\d{2})", text)
     if date_short:
         year, month, day = map(int, date_short.groups())
         return date(2000 + year, month, day).isoformat(), "date"
         
-    # 3. YYYY-MM-DD or YYYY.MM.DD check
     date_long = re.search(r"(\d{4})[.-](\d{2})[.-](\d{2})", text)
     if date_long:
         year, month, day = map(int, date_long.groups())
         return date(year, month, day).isoformat(), "date"
 
-    # 4. Fallback ISO parser
     try:
         parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
         if parsed.tzinfo is None:
@@ -255,7 +250,6 @@ def parse_series(html: str, slug: str, now: datetime | None = None) -> Series:
         except ValueError as exc:
             raise TrackerError("Unrecognized release date; refusing to advance state.") from exc
         
-        # Future date filtering is bypassed: Toptoon releases next-day chapters early on the eve of release.
         episode = Episode(chapter, episode_id,
                           f"{BASE}/comic/ep_view/{quote(slug, safe='')}/{quote(episode_id, safe='')}",
                           release, precision)
@@ -363,29 +357,52 @@ def send_discord(url: str, payload: dict) -> None:
 
 def make_payload(series: Series, episode: Episode) -> dict:
     detected = datetime.now(timezone.utc).isoformat()
-    release = episode.release
-    if episode.precision == "date":
-        release += " (Korea; exact time not published in episode list)"
-    embed = {"title": series.title[:256], "url": episode.url, "color": 0xF45236,
-             "description": f"New chapter **{episode.number}** is available.",
-             "fields": [{"name": "Chapter", "value": str(episode.number), "inline": True},
-                        {"name": "Release", "value": release},
-                        {"name": "Read chapter", "value": f"[Open on Toptoon]({episode.url})"}],
-             "footer": {"text": "Toptoon tracker • Detection time"}, "timestamp": detected}
+    release_date = episode.release[:10] 
+    
+    embed = {
+        "title": f"🚨 {series.title[:250]}", 
+        "url": episode.url, 
+        "color": 0xE50914,
+        "description": f"### Chapter {episode.number} is out!\n\n**[📖 Click here to read it on Toptoon]({episode.url})**\n\n**Release:** {release_date}",
+        "footer": {
+            "text": "Toptoon Tracker • Detection time", 
+            "icon_url": "https://toptoon.com/favicon.ico"
+        }, 
+        "timestamp": detected
+    }
+    
     if series.thumbnail:
-        embed["thumbnail"] = {"url": series.thumbnail}
-    return {"username": "Toptoon Release Tracker", "allowed_mentions": {"parse": []}, "embeds": [embed]}
+        embed["image"] = {"url": series.thumbnail}
+        
+    return {
+        "username": "Toptoon Updates", 
+        "avatar_url": "https://toptoon.com/favicon.ico",
+        "allowed_mentions": {"parse": []}, 
+        "embeds": [embed]
+    }
 
 
 def make_new_series_payload(series: NewSeries) -> dict:
-    embed = {"title": series.title[:256], "url": series.url, "color": 0xF45236,
-             "description": f"New series spotted on Toptoon!\n[Read series]({series.url})",
-             "footer": {"text": "Toptoon 19+ new-series tracker • Detection time"},
-             "timestamp": datetime.now(timezone.utc).isoformat()}
+    embed = {
+        "title": f"✨ New Series: {series.title[:250]}", 
+        "url": series.url, 
+        "color": 0xE50914,
+        "description": f"A brand new 19+ series has been spotted!\n\n**[📖 Read the first chapter here]({series.url})**",
+        "footer": {
+            "text": "Toptoon 19+ new-series tracker • Detection time",
+            "icon_url": "https://toptoon.com/favicon.ico"
+        },
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
     if series.thumbnail:
-        embed["thumbnail"] = {"url": series.thumbnail}
-    return {"username": "Toptoon Release Tracker", "allowed_mentions": {"parse": []},
-            "embeds": [embed]}
+        embed["image"] = {"url": series.thumbnail}
+        
+    return {
+        "username": "Toptoon Updates", 
+        "avatar_url": "https://toptoon.com/favicon.ico",
+        "allowed_mentions": {"parse": []},
+        "embeds": [embed]
+    }
 
 
 def process_new_series(items: tuple[NewSeries, ...], state: dict, path: Path,
