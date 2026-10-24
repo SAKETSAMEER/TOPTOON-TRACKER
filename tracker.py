@@ -139,8 +139,8 @@ def number(value: object) -> Decimal:
 
 def load_config(path: Path) -> list[str]:
     data = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(data, list) or not 1 <= len(data) <= 20:
-        raise TrackerError("series.json must contain between 1 and 20 URLs/slugs.")
+    if not isinstance(data, list) or not 1 <= len(data) <= 100:
+        raise TrackerError("series.json must contain between 1 and 100 URLs/slugs.")
     slugs = [normalize_slug(value) for value in data]
     if len(set(slugs)) != len(slugs):
         raise TrackerError("Duplicate series URLs/slugs in configuration.")
